@@ -3,6 +3,63 @@
 #include "icon.h"
 #include "options.h"
 #include "util/log.h"
+#include <windows.h>
+
+/////////////////////////////////////////////
+#ifdef _WIN32
+static Uint32 sdlCustomEvent;
+
+sdlCustomEvent = SDL_RegisterEvents(1);
+if (sdlCustomEvent == ((Uint32)-1)) {
+    // 处理错误：无法注册事件
+    LOGE("Could not register custom SDL event.");
+}
+SetKeyboardHook(); // 确保自定义事件已经注册
+
+// 键盘钩子回调函数
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        if (wParam == WM_KEYDOWN) {
+            KBDLLHOOKSTRUCT *pStruct = (KBDLLHOOKSTRUCT *)lParam;
+            if (pStruct->vkCode == VK_F4) {
+                // 检测到F4键被按下，最小化当前窗口
+                // 构造自定义事件并推送到SDL事件队列
+                SDL_Event event;
+                SDL_memset(&event, 0, sizeof(event));
+                event.type = sdlCustomEvent;
+                event.user.code = 0; // 可以用来传递自定义数据
+                SDL_PushEvent(&event);
+
+                // 按需最小化窗口等操作...
+                HWND hwnd = GetForegroundWindow();
+                if (hwnd) {
+                    ShowWindow(hwnd, SW_MINIMIZE);
+                }
+                return 1; // 不传递按键事件
+            }
+        }
+    }
+    return CallNextHookEx(NULL, nCode, wParam, lParam);
+}
+
+// 设置键盘钩子
+void SetKeyboardHook() {
+    hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
+    if (hHook == NULL) {
+        LOGE("Failed to install keyboard hook.");
+    }
+}
+
+// 卸载键盘钩子
+void UnsetKeyboardHook() {
+    if (hHook != NULL) {
+        UnhookWindowsHookEx(hHook);
+        hHook = NULL;
+    }
+}
+#endif
+/////////////////////////////////////////////
+
 
 static void
 sc_screen_otg_set_mouse_capture(struct sc_screen_otg *screen, bool capture) {
@@ -64,6 +121,12 @@ sc_screen_otg_init(struct sc_screen_otg *screen,
 
     const char *title = params->window_title;
     assert(title);
+
+    /////////////////////////////////////////////
+    #ifdef _WIN32
+    SetKeyboardHook(); // 安装键盘钩子
+    #endif
+    /////////////////////////////////////////////
 
     int x = params->window_x != SC_WINDOW_POSITION_UNDEFINED
           ? params->window_x : (int) SDL_WINDOWPOS_UNDEFINED;
@@ -134,13 +197,17 @@ sc_screen_otg_destroy(struct sc_screen_otg *screen) {
     }
     SDL_DestroyRenderer(screen->renderer);
     SDL_DestroyWindow(screen->window);
+    /////////////////////////////////////////////
+    #ifdef _WIN32
+    UnsetKeyboardHook(); // 卸载键盘钩子
+    #endif
+    /////////////////////////////////////////////
 }
 
 static inline bool
 sc_screen_otg_is_mouse_capture_key(SDL_Keycode key) {
     return key == SDLK_LALT || key == SDLK_LGUI || key == SDLK_RGUI;
 }
-
 static void
 sc_screen_otg_process_key(struct sc_screen_otg *screen,
                              const SDL_KeyboardEvent *event) {
@@ -231,6 +298,9 @@ sc_screen_otg_handle_event(struct sc_screen_otg *screen, SDL_Event *event) {
                     break;
             }
             return;
+        case sdlCustomEvent:
+            // 这里处理F4按下的逻辑
+            break;
         case SDL_KEYDOWN:
             if (screen->mouse) {
                 SDL_Keycode key = event->key.keysym.sym;
